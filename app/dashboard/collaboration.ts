@@ -1,4 +1,4 @@
-// collaboration.ts - FIXED VERSION
+// collaboration.ts - PROPERLY FIXED VERSION
 export interface CollaborationInvitation {
   id: string;
   boardId: string;
@@ -20,15 +20,15 @@ export interface Notification {
   message: string;
   read: boolean;
   createdAt: string;
+  // CHANGED: Store recipient email directly in the notification
+  recipientEmail: string;
   data: {
     invitationId?: string;
-    targetEmail?: string;
     boardId?: string;
     boardName?: string;
     fromUser?: string;
     fromUserEmail?: string;
-    // ADD THIS to properly track who should receive the notification
-    recipientEmail?: string;
+    accessLevel?: 'view' | 'edit';
   };
 }
 
@@ -89,22 +89,23 @@ class CollaborationService {
     invitations.push(invitation);
     localStorage.setItem(this.INVITATIONS_KEY, JSON.stringify(invitations));
 
-    // Create notification for the invited user - FIXED
+    // Create notification for the invited user - PROPERLY FIXED
+    // This notification goes to the RECIPIENT (toUserEmail)
     this.createNotification({
       id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'collaboration_invitation',
       title: 'Collaboration Invitation',
-      message: `${fromUser} has invited you to collaborate on "${boardName}"`,
+      message: `${fromUser} (${fromUserEmail}) has invited you to collaborate on "${boardName}"`,
       read: false,
       createdAt: new Date().toISOString(),
+      recipientEmail: toUserEmail, // THIS IS THE KEY FIX - notification goes to recipient
       data: {
         invitationId: invitation.id,
-        targetEmail: toUserEmail,
-        recipientEmail: toUserEmail, // ADD THIS
         boardId,
         boardName,
         fromUser,
         fromUserEmail,
+        accessLevel,
       },
     });
 
@@ -136,7 +137,8 @@ class CollaborationService {
       invitation.accessLevel
     );
 
-    // Create notification for the inviter - FIXED
+    // Create notification for the inviter - PROPERLY FIXED
+    // This notification goes to the ORIGINAL SENDER (fromUserEmail)
     this.createNotification({
       id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'board_access_granted',
@@ -144,12 +146,12 @@ class CollaborationService {
       message: `${invitation.toUserEmail} has accepted your collaboration invitation for "${invitation.boardName}"`,
       read: false,
       createdAt: new Date().toISOString(),
+      recipientEmail: invitation.fromUserEmail, // THIS IS THE KEY FIX - notification goes to original sender
       data: {
-        targetEmail: invitation.fromUserEmail,
-        recipientEmail: invitation.fromUserEmail, // ADD THIS - this ensures the inviter gets the notification
         boardId: invitation.boardId,
         boardName: invitation.boardName,
         fromUser: invitation.toUserEmail,
+        fromUserEmail: invitation.toUserEmail,
       },
     });
 
@@ -230,14 +232,15 @@ class CollaborationService {
     localStorage.setItem(this.NOTIFICATIONS_KEY, JSON.stringify(notifications));
   }
 
-  // Get notifications for a user - FIXED
+  // Get notifications for a user - PROPERLY FIXED
   getNotifications(userEmail?: string): Notification[] {
     if (typeof window === 'undefined') return [];
     const notifications = JSON.parse(localStorage.getItem(this.NOTIFICATIONS_KEY) || '[]');
     
     if (userEmail) {
+      // Only return notifications where the recipientEmail matches the user's email
       return notifications.filter((notif: Notification) => 
-        notif.data.recipientEmail === userEmail || notif.data.targetEmail === userEmail
+        notif.recipientEmail === userEmail
       );
     }
     
@@ -265,7 +268,7 @@ class CollaborationService {
   markAllNotificationsAsRead(userEmail: string): void {
     const notifications = this.getNotifications();
     const updatedNotifications = notifications.map(notif => {
-      if (notif.data.recipientEmail === userEmail || notif.data.targetEmail === userEmail) {
+      if (notif.recipientEmail === userEmail) {
         return { ...notif, read: true };
       }
       return notif;
@@ -280,6 +283,20 @@ class CollaborationService {
       inv => inv.status === 'pending' && new Date(inv.expiresAt) > new Date()
     );
     localStorage.setItem(this.INVITATIONS_KEY, JSON.stringify(validInvitations));
+  }
+
+  // NEW: Get notifications for the current user (helper method)
+  getCurrentUserNotifications(currentUserEmail: string): Notification[] {
+    return this.getNotifications(currentUserEmail);
+  }
+
+  // NEW: Clear all notifications for a user (useful for testing)
+  clearUserNotifications(userEmail: string): void {
+    const allNotifications = this.getNotifications();
+    const otherUsersNotifications = allNotifications.filter(
+      notif => notif.recipientEmail !== userEmail
+    );
+    localStorage.setItem(this.NOTIFICATIONS_KEY, JSON.stringify(otherUsersNotifications));
   }
 }
 

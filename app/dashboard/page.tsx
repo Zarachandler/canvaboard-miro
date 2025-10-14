@@ -728,55 +728,22 @@ export default function Dashboard() {
     loadUserNotifications(userEmail);
   };
 
-  // Function to simulate receiving a collaboration invitation (for testing)
+  // Function to simulate receiving a collaboration invitation (for testing) - FIXED VERSION
   const simulateCollaborationInvitation = () => {
     if (!recentBoard) {
       alert('Please create a board first to test collaboration invitations');
       return;
     }
 
-    const invitation: CollaborationInvitation = {
-      id: `invite-${Date.now()}`,
-      boardId: recentBoard.id,
-      boardName: recentBoard.name,
-      fromUser: 'Test User',
-      fromUserEmail: 'test@example.com',
-      toUserEmail: userEmail,
-      status: 'pending',
-      sentAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-      accessLevel: 'edit'
-    };
-
-    // Save invitation using collaborationService
-    const allInvitations = collaborationService.getCollaborationInvitations();
-    allInvitations.push(invitation);
-    localStorage.setItem('collaborationInvitations', JSON.stringify(allInvitations));
-
-    // Create notification
-    const notification: Notification = {
-      id: `notif-${Date.now()}`,
-      type: 'collaboration_invitation',
-      title: 'Collaboration Invitation',
-      message: `You've been invited to collaborate on "${invitation.boardName}" by ${invitation.fromUser}`,
-      read: false,
-      createdAt: new Date().toISOString(),
-      data: {
-        invitationId: invitation.id,
-        targetEmail: userEmail,
-        boardId: invitation.boardId,
-        boardName: invitation.boardName,
-        fromUser: invitation.fromUser
-      }
-    };
-
-    const allNotifications = collaborationService.getNotifications();
-    allNotifications.push(notification);
-    localStorage.setItem('notifications', JSON.stringify(allNotifications));
-
-    // Reload notifications and invitations
-    loadUserNotifications(userEmail);
-    loadCollaborationInvitations(userEmail);
+    // Use the collaborationService to create a proper invitation
+    const invitationId = collaborationService.createCollaborationInvitation(
+      recentBoard.id,
+      recentBoard.name,
+      'Test User',
+      'test@example.com',
+      userEmail, // Send to current user
+      'edit'
+    );
 
     toast({
       title: "Test Invitation Sent",
@@ -1013,8 +980,8 @@ export default function Dashboard() {
                       Collaboration Invitation
                     </p>
                     <p className="text-xs text-gray-600 mt-1">
-  You&apos;ve been invited to collaborate on <strong>&quot;{invitation.boardName}&quot;</strong> by {invitation.fromUser}
-                 </p>
+                      You&apos;ve been invited to collaborate on <strong>&quot;{invitation.boardName}&quot;</strong> by {invitation.fromUser}
+                    </p>
                     <p className="text-xs text-gray-500 mt-1">
                       Expires: {new Date(invitation.expiresAt).toLocaleDateString()}
                     </p>
