@@ -1,4 +1,4 @@
-// collaboration.ts - FIXED VERSION
+// collaboration.ts - COMPLETED VERSION
 export interface CollaborationInvitation {
   id: string;
   boardId: string;
@@ -27,8 +27,6 @@ export interface Notification {
     boardName?: string;
     fromUser?: string;
     fromUserEmail?: string;
-    // ADD THIS to properly track who should receive the notification
-    recipientEmail?: string;
   };
 }
 
@@ -89,7 +87,7 @@ class CollaborationService {
     invitations.push(invitation);
     localStorage.setItem(this.INVITATIONS_KEY, JSON.stringify(invitations));
 
-    // Create notification for the invited user - FIXED
+    // Create notification for the invited user
     this.createNotification({
       id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'collaboration_invitation',
@@ -100,7 +98,6 @@ class CollaborationService {
       data: {
         invitationId: invitation.id,
         targetEmail: toUserEmail,
-        recipientEmail: toUserEmail, // ADD THIS
         boardId,
         boardName,
         fromUser,
@@ -136,7 +133,7 @@ class CollaborationService {
       invitation.accessLevel
     );
 
-    // Create notification for the inviter - FIXED
+    // Create notification for the inviter
     this.createNotification({
       id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'board_access_granted',
@@ -146,7 +143,6 @@ class CollaborationService {
       createdAt: new Date().toISOString(),
       data: {
         targetEmail: invitation.fromUserEmail,
-        recipientEmail: invitation.fromUserEmail, // ADD THIS - this ensures the inviter gets the notification
         boardId: invitation.boardId,
         boardName: invitation.boardName,
         fromUser: invitation.toUserEmail,
@@ -230,14 +226,14 @@ class CollaborationService {
     localStorage.setItem(this.NOTIFICATIONS_KEY, JSON.stringify(notifications));
   }
 
-  // Get notifications for a user - FIXED
+  // Get notifications for a user
   getNotifications(userEmail?: string): Notification[] {
     if (typeof window === 'undefined') return [];
     const notifications = JSON.parse(localStorage.getItem(this.NOTIFICATIONS_KEY) || '[]');
     
     if (userEmail) {
       return notifications.filter((notif: Notification) => 
-        notif.data.recipientEmail === userEmail || notif.data.targetEmail === userEmail
+        notif.data.targetEmail === userEmail
       );
     }
     
@@ -253,24 +249,6 @@ class CollaborationService {
       notifications[notificationIndex].read = true;
       localStorage.setItem(this.NOTIFICATIONS_KEY, JSON.stringify(notifications));
     }
-  }
-
-  // Get unread notifications count for a user
-  getUnreadNotificationsCount(userEmail: string): number {
-    const userNotifications = this.getNotifications(userEmail);
-    return userNotifications.filter(notif => !notif.read).length;
-  }
-
-  // Mark all notifications as read for a user
-  markAllNotificationsAsRead(userEmail: string): void {
-    const notifications = this.getNotifications();
-    const updatedNotifications = notifications.map(notif => {
-      if (notif.data.recipientEmail === userEmail || notif.data.targetEmail === userEmail) {
-        return { ...notif, read: true };
-      }
-      return notif;
-    });
-    localStorage.setItem(this.NOTIFICATIONS_KEY, JSON.stringify(updatedNotifications));
   }
 
   // Clean up expired invitations

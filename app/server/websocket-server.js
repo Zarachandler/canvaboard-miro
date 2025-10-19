@@ -1,13 +1,13 @@
 const WebSocket = require('ws');
-
-const wss = new WebSocket.Server({ port: 3001 });
+const wss = new WebSocket.Server({ port: 8080 }); // Use 8080 everywhere for clarity
 
 // Store active connections per board
 const boardConnections = new Map();
 
 wss.on('connection', (ws, request) => {
   console.log('New WebSocket connection attempt');
-  
+
+  // For ws, use the full host to parse query params (supported in Node 16+)
   const url = new URL(request.url, `http://${request.headers.host}`);
   const boardId = url.searchParams.get('boardId');
   const userId = url.searchParams.get('userId');
@@ -32,7 +32,7 @@ wss.on('connection', (ws, request) => {
     try {
       const message = JSON.parse(data);
       console.log('Received message:', message.type, 'from', message.userId);
-      
+
       // Broadcast cursor movements to all other users in the same board
       if (message.type === 'cursor_move' || message.type === 'join') {
         boardUsers.forEach((userWs, otherUserId) => {
@@ -62,4 +62,4 @@ wss.on('connection', (ws, request) => {
   });
 });
 
-console.log('WebSocket server running on port 3001');
+console.log('WebSocket server running on port 8080');

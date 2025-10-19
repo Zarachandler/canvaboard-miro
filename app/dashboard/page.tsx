@@ -15,7 +15,6 @@ import {
   Star, 
   Clock, 
   Gift,
-  Bell,
   ChevronRight,
   Rocket,
   Zap,
@@ -25,20 +24,17 @@ import {
   LogOut,
   User,
   Trash2,
-  Edit3,
-  Check,
-  X,
   Workflow,
   Brain,
   LayoutGrid, 
   RefreshCw,
   Lightbulb,
   Shapes,
-  UserPlus
+  Share2,
+  Download
 } from 'lucide-react';
 import Link from 'next/link'; 
 import { useToast } from '@/hooks/use-toast';
-import { CollaborationInvitation, collaborationService, Notification } from './collaboration';
 
 // ---------- TYPES ----------
 type BoardMetadata = {
@@ -59,6 +55,15 @@ type TemplateType = {
   bgColor: string;
   borderColor: string;
   hoverColor: string;
+};
+
+type SharedCanvas = {
+  id: number;
+  data: string;
+  boardName: string;
+  boardId: string;
+  sharedAt: string;
+  sharedBy: string;
 };
 
 // BoardFilterBar Props Interface
@@ -271,6 +276,172 @@ const TemplateBar = ({ onTemplateClick }: { onTemplateClick: (templateId: string
     </div>
   );
 };
+
+// ---------- SHARED CANVASES COMPONENT ----------
+function SharedCanvasesSection({ userEmail }: { userEmail: string }) {
+  const [sharedCanvases, setSharedCanvases] = useState<SharedCanvas[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const router = useRouter();
+  const { toast } = useToast();
+
+  useEffect(() => {
+    if (userEmail) {
+      loadSharedCanvases();
+    }
+  }, [userEmail]);
+
+  const loadSharedCanvases = () => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("sharedCanvases") || "{}");
+      const userCanvases = stored[userEmail] || [];
+      
+      // Transform the data to include proper typing
+      const transformedCanvases: SharedCanvas[] = userCanvases.map((canvas: any) => ({
+        id: canvas.id,
+        data: canvas.data,
+        boardName: canvas.boardName || 'Untitled Board',
+        boardId: canvas.boardId || `shared-${canvas.id}`,
+        sharedAt: canvas.sharedAt || new Date().toISOString(),
+        sharedBy: canvas.sharedBy || 'Unknown User'
+      }));
+      
+      setSharedCanvases(transformedCanvases);
+    } catch (error) {
+      console.error('Error loading shared canvases:', error);
+      setSharedCanvases([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleOpenSharedCanvas = (canvas: SharedCanvas) => {
+    try {
+      // Parse the canvas data
+      const canvasData = JSON.parse(canvas.data);
+      
+      // Create a new board ID for the shared canvas
+      const newBoardId = `shared-${canvas.id}-${Date.now()}`;
+      
+      // Save the shared canvas data to localStorage
+      localStorage.setItem(`board-${newBoardId}-data`, JSON.stringify(canvasData));
+      
+      // Create board metadata
+      const newBoard: BoardMetadata = {
+        id: newBoardId,
+        name: `${canvas.boardName} (Shared)`,
+        owner: 'Shared',
+        lastOpened: new Date().toISOString(),
+        templateType: 'shared'
+      };
+      
+      // Save to recent boards
+      const recentBoards = JSON.parse(localStorage.getItem('recentBoards') || '[]');
+      const updatedBoards = [newBoard, ...recentBoards.filter((b: BoardMetadata) => b.id !== newBoardId)];
+      localStorage.setItem('recentBoards', JSON.stringify(updatedBoards));
+      
+      // Redirect to the canvas
+      router.push(`/canvas?board=${newBoardId}`);
+      
+      toast({
+        title: "Shared Canvas Opened",
+        description: `You are now viewing "${canvas.boardName}" shared with you.`,
+      });
+    } catch (error) {
+      console.error('Error opening shared canvas:', error);
+      toast({
+        title: "Error",
+        description: "Could not open the shared canvas. The data might be corrupted.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const getTimeAgo = (dateString: string): string => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
+    
+    if (diffInHours < 1) return 'Just now';
+    if (diffInHours < 24) return `${diffInHours} hours ago`;
+    if (diffInHours < 168) return `${Math.floor(diffInHours / 24)} days ago`;
+    return `${Math.floor(diffInHours / 168)} weeks ago`;
+  };
+
+  if (isLoading) {
+    return (
+      <Card className="mb-8 border-0 shadow-sm">
+        <CardContent className="p-6">
+          <div className="text-center py-8">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+            <p className="text-gray-600 mt-4">Loading shared canvases...</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (sharedCanvases.length === 0) {
+    return null; // Don't show section if no shared canvases
+  }
+
+  return (
+    <div className="mb-8">
+      <div className="flex items-center justify-between mb-6">
+        <h3 className="text-xl font-semibold text-gray-900">Shared with You</h3>
+        <Badge variant="secondary" className="text-sm">
+          {sharedCanvases.length} canvas{sharedCanvases.length !== 1 ? 'es' : ''}
+        </Badge>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {sharedCanvases.map((canvas) => (
+          <Card 
+            key={canvas.id} 
+            className="cursor-pointer transition-all duration-300 hover:shadow-lg border-2 border-dashed border-blue-200 bg-blue-50/50"
+            onClick={() => handleOpenSharedCanvas(canvas)}
+          >
+            <CardContent className="p-6">
+              <div className="flex items-start justify-between mb-4">
+                <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center">
+                  <Share2 className="w-6 h-6 text-white" />
+                </div>
+                <Badge variant="outline" className="bg-white text-blue-600">
+                  Shared
+                </Badge>
+              </div>
+              
+              <h4 className="font-semibold text-gray-900 mb-2 truncate">
+                {canvas.boardName}
+              </h4>
+              
+              <div className="space-y-2 text-sm text-gray-600">
+                <div className="flex items-center space-x-2">
+                  <User className="w-4 h-4" />
+                  <span>Shared by: {canvas.sharedBy}</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Calendar className="w-4 h-4" />
+                  <span>{getTimeAgo(canvas.sharedAt)}</span>
+                </div>
+              </div>
+              
+              <Button 
+                className="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleOpenSharedCanvas(canvas);
+                }}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Open Shared Canvas
+              </Button>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 // ---------- TEMPLATE FUNCTIONALITIES ----------
 
@@ -602,7 +773,6 @@ export default function Dashboard() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false);
   const [userInitials, setUserInitials] = useState('NA');
   const [userEmail, setUserEmail] = useState('');
   const [userName, setUserName] = useState('');
@@ -616,11 +786,6 @@ export default function Dashboard() {
   const [ownedBy, setOwnedBy] = useState("anyone");
   const [sortBy, setSortBy] = useState("last-opened");
 
-  // Notification states
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [collaborationInvitations, setCollaborationInvitations] = useState<CollaborationInvitation[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
-
   useEffect(() => {
     // Get user email from localStorage
     const storedUserEmail = localStorage.getItem('userEmail');
@@ -631,10 +796,6 @@ export default function Dashboard() {
       setUserName(storedUserName);
       const initials = storedUserName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
       setUserInitials(initials);
-      
-      // Load notifications and collaboration invitations for this user
-      loadUserNotifications(storedUserEmail);
-      loadCollaborationInvitations(storedUserEmail);
     }
 
     // Load and deduplicate recent boards
@@ -645,144 +806,7 @@ export default function Dashboard() {
     // Get only the most recent board (first one in the array)
     const mostRecentBoard = uniqueBoards.length > 0 ? uniqueBoards[0] : null;
     setRecentBoard(mostRecentBoard);
-
-    // Set up interval to check for new notifications
-    const interval = setInterval(() => {
-      if (storedUserEmail) {
-        loadUserNotifications(storedUserEmail);
-        loadCollaborationInvitations(storedUserEmail);
-      }
-    }, 5000); // Check every 5 seconds
-
-    return () => clearInterval(interval);
   }, []);
-
-  // Load user notifications using collaborationService - FIXED VERSION
-  const loadUserNotifications = (email: string) => {
-    const userNotifications = collaborationService.getNotifications(email);
-    setNotifications(userNotifications);
-    
-    // Calculate unread count manually
-    const unreadCount = userNotifications.filter(notif => !notif.read).length;
-    setUnreadCount(unreadCount);
-  };
-
-  // Load collaboration invitations for user using collaborationService
-  const loadCollaborationInvitations = (email: string) => {
-    const userInvitations = collaborationService.getUserCollaborationInvitations(email);
-    setCollaborationInvitations(userInvitations);
-  };
-
-  // Handle collaboration invitation response - FIXED VERSION
-  const handleCollaborationResponse = (invitationId: string, accept: boolean) => {
-    const success = accept ? 
-      collaborationService.acceptCollaborationInvitation(invitationId) : 
-      collaborationService.declineCollaborationInvitation(invitationId);
-    
-    if (success) {
-      if (accept) {
-        // Find the invitation
-        const invitation = collaborationInvitations.find(inv => inv.id === invitationId);
-        if (invitation) {
-          toast({
-            title: "Invitation Accepted",
-            description: `You now have access to "${invitation.boardName}"`
-          });
-          
-          // Reload boards to show the newly accessible board
-          const recentBoards = JSON.parse(localStorage.getItem('recentBoards') || '[]');
-          setBoards(recentBoards);
-          
-          // Redirect to the accepted board after a short delay
-          setTimeout(() => {
-            router.push(`/canvas?board=${invitation.boardId}`);
-          }, 1000);
-        }
-      } else {
-        toast({
-          title: "Invitation Declined",
-          description: "Collaboration invitation has been declined"
-        });
-      }
-    }
-    
-    // Reload invitations and notifications
-    loadCollaborationInvitations(userEmail);
-    loadUserNotifications(userEmail);
-  };
-
-  // Mark notification as read
-  const markNotificationAsRead = (notificationId: string) => {
-    collaborationService.markNotificationAsRead(notificationId);
-    loadUserNotifications(userEmail);
-  };
-
-  // Mark all notifications as read - FIXED VERSION
-  const markAllNotificationsAsRead = () => {
-    // Mark each unread notification individually
-    notifications.forEach(notification => {
-      if (!notification.read) {
-        collaborationService.markNotificationAsRead(notification.id);
-      }
-    });
-    loadUserNotifications(userEmail);
-  };
-
-  // Function to simulate receiving a collaboration invitation (for testing)
-  const simulateCollaborationInvitation = () => {
-    if (!recentBoard) {
-      alert('Please create a board first to test collaboration invitations');
-      return;
-    }
-
-    const invitation: CollaborationInvitation = {
-      id: `invite-${Date.now()}`,
-      boardId: recentBoard.id,
-      boardName: recentBoard.name,
-      fromUser: 'Test User',
-      fromUserEmail: 'test@example.com',
-      toUserEmail: userEmail,
-      status: 'pending',
-      sentAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-      accessLevel: 'edit'
-    };
-
-    // Save invitation using collaborationService
-    const allInvitations = collaborationService.getCollaborationInvitations();
-    allInvitations.push(invitation);
-    localStorage.setItem('collaborationInvitations', JSON.stringify(allInvitations));
-
-    // Create notification
-    const notification: Notification = {
-      id: `notif-${Date.now()}`,
-      type: 'collaboration_invitation',
-      title: 'Collaboration Invitation',
-      message: `You've been invited to collaborate on "${invitation.boardName}" by ${invitation.fromUser}`,
-      read: false,
-      createdAt: new Date().toISOString(),
-      data: {
-        invitationId: invitation.id,
-        targetEmail: userEmail,
-        boardId: invitation.boardId,
-        boardName: invitation.boardName,
-        fromUser: invitation.fromUser
-      }
-    };
-
-    const allNotifications = collaborationService.getNotifications();
-    allNotifications.push(notification);
-    localStorage.setItem('notifications', JSON.stringify(allNotifications));
-
-    // Reload notifications and invitations
-    loadUserNotifications(userEmail);
-    loadCollaborationInvitations(userEmail);
-
-    toast({
-      title: "Test Invitation Sent",
-      description: "Check your notifications for the test collaboration invitation."
-    });
-  };
 
   const handleLogout = () => {
     router.push('/login');
@@ -857,19 +881,12 @@ export default function Dashboard() {
     router.push(`/canvas?board=${newBoardId}`);
   };
 
+  // UPDATED: Handle board click - REMOVED ACCESS CHECK
   const handleBoardClick = (boardId?: string) => {
     const boardToOpen = boardId ? boards.find(b => b.id === boardId) : recentBoard;
     if (!boardToOpen) return;
     
-    // Check if user has access to this board
-    if (!collaborationService.hasBoardAccess(boardToOpen.id, userEmail) && boardToOpen.owner !== userInitials) {
-      toast({
-        title: "Access Denied",
-        description: "You don't have permission to access this board.",
-        variant: "destructive"
-      });
-      return;
-    }
+    // REMOVED ACCESS CHECK - Allow anyone to open any board from dashboard
     
     // Update last opened time
     const updatedBoard = {
@@ -979,138 +996,6 @@ export default function Dashboard() {
     }
   });
 
-  // Enhanced Notification Dropdown Component - FIXED VERSION
-  const NotificationDropdown = () => (
-    <div className="absolute right-0 mt-2 w-96 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-96 overflow-hidden">
-      <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-        <h3 className="font-semibold text-gray-900">Notifications</h3>
-        {unreadCount > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={markAllNotificationsAsRead}
-            className="text-xs text-blue-600"
-          >
-            Mark all as read
-          </Button>
-        )}
-      </div>
-      
-      <div className="max-h-80 overflow-y-auto">
-        {notifications.length === 0 && collaborationInvitations.length === 0 ? (
-          <div className="p-4 text-center text-gray-500">
-            No new notifications
-          </div>
-        ) : (
-          <>
-            {/* Collaboration Invitations */}
-            {collaborationInvitations.map(invitation => (
-              <div key={invitation.id} className="p-4 border-b border-gray-100 hover:bg-gray-50">
-                <div className="flex items-start space-x-3">
-                  <UserPlus className="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900">
-                      Collaboration Invitation
-                    </p>
-                    <p className="text-xs text-gray-600 mt-1">
-  You&apos;ve been invited to collaborate on <strong>&quot;{invitation.boardName}&quot;</strong> by {invitation.fromUser}
-                 </p>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Expires: {new Date(invitation.expiresAt).toLocaleDateString()}
-                    </p>
-                    <div className="flex space-x-2 mt-3">
-                      <Button
-                        size="sm"
-                        className="bg-green-600 hover:bg-green-700 text-white text-xs"
-                        onClick={() => handleCollaborationResponse(invitation.id, true)}
-                      >
-                        <Check className="w-3 h-3 mr-1" />
-                        Accept
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="text-red-600 border-red-200 hover:bg-red-50 text-xs"
-                        onClick={() => handleCollaborationResponse(invitation.id, false)}
-                      >
-                        <X className="w-3 h-3 mr-1" />
-                        Decline
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-            
-            {/* Other Notifications */}
-            {notifications.map(notification => (
-              <div 
-                key={notification.id} 
-                className={`p-4 border-b border-gray-100 hover:bg-gray-50 cursor-pointer ${
-                  !notification.read ? 'bg-blue-50' : ''
-                }`}
-                onClick={() => {
-                  markNotificationAsRead(notification.id);
-                  // If it's a board access notification, redirect to the board
-                  if (notification.type === 'board_access_granted' && notification.data.boardId) {
-                    router.push(`/canvas?board=${notification.data.boardId}`);
-                  }
-                }}
-              >
-                <div className="flex items-start space-x-3">
-                  {notification.type === 'collaboration_invitation' ? (
-                    <UserPlus className="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" />
-                  ) : notification.type === 'board_access_granted' ? (
-                    <Check className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
-                  ) : (
-                    <Bell className="w-5 h-5 text-gray-500 mt-0.5 flex-shrink-0" />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between">
-                      <p className="text-sm font-medium text-gray-900">
-                        {notification.title}
-                        {!notification.read && (
-                          <span className="ml-2 w-2 h-2 bg-blue-500 rounded-full inline-block"></span>
-                        )}
-                      </p>
-                      <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
-                        {new Date(notification.createdAt).toLocaleDateString()}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-600 mt-1">
-                      {notification.message}
-                    </p>
-                    {notification.type === 'board_access_granted' && (
-                      <p className="text-xs text-blue-600 mt-2 font-medium">
-                        Click to open the board
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </>
-        )}
-      </div>
-      
-      <div className="p-3 border-t border-gray-200 bg-gray-50">
-        <div className="flex justify-between items-center">
-          <span className="text-xs text-gray-600">
-            {unreadCount} unread notification{unreadCount !== 1 ? 's' : ''}
-          </span>
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            className="text-xs text-blue-600 hover:text-blue-700"
-            onClick={simulateCollaborationInvitation}
-          >
-            Test Collaboration
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-
   // If no board available, show the enhanced empty state
   if (!recentBoard) {
     return (
@@ -1149,25 +1034,6 @@ export default function Dashboard() {
               <Button variant="ghost" size="sm" className="p-2 hover:bg-gray-100">
                 <Gift className="w-4 h-4" />
               </Button>
-              
-              {/* Notification Bell */}
-              <div className="relative">
-                <Button 
-                  variant="ghost" 
-                  size="sm" 
-                  className="p-2 hover:bg-gray-100 relative"
-                  onClick={() => setNotificationDropdownOpen(!notificationDropdownOpen)}
-                >
-                  <Bell className="w-4 h-4" />
-                  {unreadCount > 0 && (
-                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full flex items-center justify-center">
-                      <span className="text-white text-xs">{unreadCount}</span>
-                    </div>
-                  )}
-                </Button>
-                
-                {notificationDropdownOpen && <NotificationDropdown />}
-              </div>
 
               {/* User Avatar */}
               <div className="relative">
@@ -1319,6 +1185,9 @@ export default function Dashboard() {
                 <TemplateBar onTemplateClick={handleTemplateClick} />
               </div>
 
+              {/* Shared Canvases Section */}
+              {userEmail && <SharedCanvasesSection userEmail={userEmail} />}
+
               {/* Empty State */}
               <Card className="border-2 border-dashed border-gray-200 bg-gray-50/50">
                 <CardContent className="text-center py-20">
@@ -1382,25 +1251,6 @@ export default function Dashboard() {
             <Button variant="ghost" size="sm" className="p-2 hover:bg-gray-100">
               <Gift className="w-4 h-4" />
             </Button>
-            
-            {/* Notification Bell with Dropdown */}
-            <div className="relative">
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                className="p-2 hover:bg-gray-100 relative"
-                onClick={() => setNotificationDropdownOpen(!notificationDropdownOpen)}
-              >
-                <Bell className="w-4 h-4" />
-                {unreadCount > 0 && (
-                  <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full flex items-center justify-center">
-                    <span className="text-white text-xs">{unreadCount}</span>
-                  </div>
-                )}
-              </Button>
-              
-              {notificationDropdownOpen && <NotificationDropdown />}
-            </div>
 
             {/* User Avatar */}
             <div className="relative">
@@ -1551,6 +1401,9 @@ export default function Dashboard() {
               
               <TemplateBar onTemplateClick={handleTemplateClick} />
             </div>
+
+            {/* Shared Canvases Section */}
+            {userEmail && <SharedCanvasesSection userEmail={userEmail} />}
 
             {/* Filter Bar */}
             <div className="mb-6">

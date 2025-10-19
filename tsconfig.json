@@ -22,6 +22,6 @@
       "@/*": ["./*"]
     }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", "app/api/canvas/save/invitation", "app/api/canvas/save/invitations/accept.ss", "app/api/canvas/save/route.ts"],
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", "app/api/canvas/save/invitation", "app/api/canvas/save/invitations/accept.ss", "app/api/canvas/save/route.ts", "app/api/route.ts"],
   "exclude": ["node_modules"]
 }
