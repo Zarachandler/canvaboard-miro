@@ -20,6 +20,7 @@ wss.on('connection', (ws, request) => {
     return;
   }
 
+  
   if (!boardConnections.has(boardId)) {
     boardConnections.set(boardId, new Map());
   }

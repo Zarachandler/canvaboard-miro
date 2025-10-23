@@ -25,6 +25,10 @@ import ZoomableGrid from "../board/ZoomableGrid";
 import { useToast } from "@/hooks/use-toast";
 import { createClient } from '@supabase/supabase-js';
 
+// Import the TypeScript files
+import { useBoardElements } from '@/lib/useBoardElements';
+import { useBoardPresence } from '@/lib/useBoardPresence';
+
 import {
   StickyNote,
   MousePointer2,
@@ -882,8 +886,6 @@ function CollaboratorsPanel({
   );
 }
 
-// ... (keep the rest of your existing code - UserDropdown, useCursorMovement, MessageIconWithTextarea, RemoteCursor, and main Home component)
-
 // UseCursorMovement and other components remain the same as before
 const useCursorMovement = ({ 
   boardId, 
@@ -1128,11 +1130,8 @@ function RemoteCursor({ cursor }: { cursor: RemoteCursor }) {
   );
 }
 
-// Main Home component remains the same as before
+// Main Home component with integrated hooks
 export default function Home() {
-  // ... (keep all your existing state and functions from the main Home component)
-  // This part remains exactly the same as your previous working version
-
   const { toast } = useToast();
   const [boardId, setBoardId] = useState("");
   const [boardName, setBoardName] = useState("");
@@ -1155,6 +1154,17 @@ export default function Home() {
   const [diagramMode, setDiagramMode] = useState(false);
   const [freehandPaths, setFreehandPaths] = useState<FreehandPath[]>([]);
   const [comments, setComments] = useState<CommentType[]>([]);
+
+  // New state for board elements
+  const [boardElements, setBoardElements] = useState<any[]>([]);
+
+  // Use the imported hooks
+  useBoardElements(boardId, setBoardElements);
+  
+  const { presenceUsers, updateCursor } = useBoardPresence(boardId, {
+    id: userId || 'anonymous',
+    name: userEmail?.split('@')[0] || 'Anonymous'
+  });
 
   const { sendCursor, isConnected } = useCursorMovement({
     boardId: boardId || 'default-board',
@@ -1583,6 +1593,7 @@ export default function Home() {
     
     setCursorPosition({ x, y });
     sendCursor(x, y);
+    updateCursor(x, y);
 
     if (draggingId) {
       setShapes(prev =>
@@ -1924,6 +1935,32 @@ export default function Home() {
 
             {remoteCursors.map((cursor) => (
               <RemoteCursor key={cursor.userId} cursor={cursor} />
+            ))}
+
+            {/* Presence users from useBoardPresence hook */}
+            {presenceUsers.map((user) => (
+              <div
+                key={user.id}
+                className="absolute pointer-events-none z-40 transition-all duration-100"
+                style={{
+                  top: user.y,
+                  left: user.x,
+                  transform: 'translate(-50%, -50%)',
+                }}
+              >
+                <div className="relative">
+                  <div 
+                    className="w-3 h-3 rounded-full border-2 border-white shadow-md"
+                    style={{ backgroundColor: user.color }}
+                  />
+                  <div 
+                    className="absolute top-4 left-1/2 transform -translate-x-1/2 px-2 py-1 rounded text-xs text-white whitespace-nowrap"
+                    style={{ backgroundColor: user.color }}
+                  >
+                    {user.name}
+                  </div>
+                </div>
+              </div>
             ))}
 
             <div className="absolute bottom-4 right-4 z-40">

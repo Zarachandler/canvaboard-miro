@@ -36,6 +36,20 @@ import {
 import Link from 'next/link'; 
 import { useToast } from '@/hooks/use-toast';
 
+// Import board functions and types
+import { 
+  createBoardWithDefaults, 
+  getUserBoards, 
+  updateBoard, 
+  deleteBoard,
+  toggleStar,
+  Board,
+  BoardType,
+  fetchOnlineUsers,
+  addUserToBoard,
+  checkBoardAccess
+} from '@/lib/board';
+
 // ---------- TYPES ----------
 type BoardMetadata = {
   id: string;
@@ -45,6 +59,8 @@ type BoardMetadata = {
   isStarred?: boolean;
   isArchived?: boolean;
   templateType?: string;
+  onlineUsers?: number;
+  ownerId?: string;
 };
 
 type TemplateType = {
@@ -776,10 +792,12 @@ export default function Dashboard() {
   const [userInitials, setUserInitials] = useState('NA');
   const [userEmail, setUserEmail] = useState('');
   const [userName, setUserName] = useState('');
+  const [userId, setUserId] = useState('');
   const [recentBoard, setRecentBoard] = useState<BoardMetadata | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [boards, setBoards] = useState<BoardMetadata[]>([]);
   const [deleteConfirmTable, setDeleteConfirmTable] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Filter and sort states
   const [filterBy, setFilterBy] = useState("all");
@@ -787,158 +805,370 @@ export default function Dashboard() {
   const [sortBy, setSortBy] = useState("last-opened");
 
   useEffect(() => {
-    // Get user email from localStorage
-    const storedUserEmail = localStorage.getItem('userEmail');
-    const storedUserName = localStorage.getItem('userName') || 'User';
-    
-    if (storedUserEmail) {
-      setUserEmail(storedUserEmail);
-      setUserName(storedUserName);
-      const initials = storedUserName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
-      setUserInitials(initials);
-    }
+    loadUserDataAndBoards();
+  }, []);
 
-    // Load and deduplicate recent boards
+  const loadUserDataAndBoards = async () => {
+    try {
+      // Get user data from localStorage
+      const storedUserEmail = localStorage.getItem('userEmail');
+      const storedUserName = localStorage.getItem('userName') || 'User';
+      const storedUserId = localStorage.getItem('userId') || storedUserEmail || 'unknown-user';
+      
+      if (storedUserEmail) {
+        setUserEmail(storedUserEmail);
+        setUserName(storedUserName);
+        setUserId(storedUserId);
+        const initials = storedUserName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+        setUserInitials(initials);
+      }
+
+      // Load boards from database
+      await loadBoardsFromDatabase(storedUserId);
+      
+    } catch (error) {
+      console.error('Error loading user data and boards:', error);
+      // Fallback to localStorage if database fails
+      loadBoardsFromLocalStorage();
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadBoardsFromDatabase = async (userId: string) => {
+    try {
+      const databaseBoards = await getUserBoards(userId);
+      
+      // Transform database boards to BoardMetadata format
+      const transformedBoards: BoardMetadata[] = await Promise.all(
+        databaseBoards.map(async (board) => {
+          const onlineUsers = await fetchOnlineUsers(board.id);
+          return {
+            id: board.id,
+            name: board.name,
+            owner: board.owner,
+            ownerId: board.owner_id,
+            lastOpened: board.updated_at,
+            isStarred: board.starred,
+            isArchived: false,
+            templateType: board.type,
+            onlineUsers
+          };
+        })
+      );
+
+      setBoards(transformedBoards);
+      
+      // Get only the most recent board
+      const mostRecentBoard = transformedBoards.length > 0 
+        ? transformedBoards.sort((a, b) => new Date(b.lastOpened).getTime() - new Date(a.lastOpened).getTime())[0]
+        : null;
+      setRecentBoard(mostRecentBoard);
+
+      // Also sync to localStorage for backward compatibility
+      localStorage.setItem('recentBoards', JSON.stringify(transformedBoards));
+      
+    } catch (error) {
+      console.error('Error loading boards from database:', error);
+      throw error; // Re-throw to trigger fallback
+    }
+  };
+
+  const loadBoardsFromLocalStorage = () => {
+    // Fallback to localStorage if database is not available
     const recentBoards = JSON.parse(localStorage.getItem('recentBoards') || '[]') as BoardMetadata[];
     const uniqueBoards = Array.from(new Map(recentBoards.map(board => [board.id, board])).values());
     setBoards(uniqueBoards);
     
-    // Get only the most recent board (first one in the array)
     const mostRecentBoard = uniqueBoards.length > 0 ? uniqueBoards[0] : null;
     setRecentBoard(mostRecentBoard);
-  }, []);
+  };
 
   const handleLogout = () => {
+    localStorage.removeItem('userEmail');
+    localStorage.removeItem('userName');
+    localStorage.removeItem('userId');
     router.push('/login');
   };
 
-  const handleTemplateClick = (templateId: string) => {
-    // Create a new board and redirect to canvas
-    const newBoardId = `board-${Date.now()}`;
-    
-    // Get template title
-    const template = templates.find(t => t.id === templateId) || {
-      id: templateId,
-      title: templateId === 'miroverse' ? 'From Miroverse' : 'Blank Board'
-    };
-    
-    const newBoard: BoardMetadata = {
-      id: newBoardId,
-      name: `${template.title}`,
-      owner: userInitials,
-      lastOpened: new Date().toISOString(),
-      isStarred: false,
-      isArchived: false,
-      templateType: templateId
-    };
-    
-    // Save initial template data
-    const templateData = getTemplateInitialData(templateId);
-    localStorage.setItem(`board-${newBoardId}-data`, JSON.stringify(templateData));
-    
-    // Save template tools configuration
-    const templateTools = getTemplateTools(templateId);
-    localStorage.setItem(`board-${newBoardId}-tools`, JSON.stringify(templateTools));
-    
-    // Save to recent boards with deduplication
-    const updatedBoards = [newBoard, ...boards.filter(b => b.id !== newBoardId)];
-    localStorage.setItem('recentBoards', JSON.stringify(updatedBoards));
-    setBoards(updatedBoards);
-    setRecentBoard(newBoard);
-    
-    // Redirect to canvas with the new board
-    router.push(`/canvas?board=${newBoardId}&template=${templateId}`);
+  const handleTemplateClick = async (templateId: string) => {
+    try {
+      // Get template title
+      const template = templates.find(t => t.id === templateId) || {
+        id: templateId,
+        title: templateId === 'miroverse' ? 'From Miroverse' : 'Blank Board'
+      };
+      
+      // Create board in database
+      const newBoard = await createBoardWithDefaults(
+        template.title,
+        templateId as BoardType,
+        userName,
+        userId
+      );
+
+      // Add current user as collaborator
+      await addUserToBoard(userEmail, newBoard.id, userName);
+
+      // Save initial template data to localStorage
+      const templateData = getTemplateInitialData(templateId);
+      localStorage.setItem(`board-${newBoard.id}-data`, JSON.stringify(templateData));
+      
+      // Save template tools configuration
+      const templateTools = getTemplateTools(templateId);
+      localStorage.setItem(`board-${newBoard.id}-tools`, JSON.stringify(templateTools));
+      
+      // Transform to BoardMetadata and update state
+      const boardMetadata: BoardMetadata = {
+        id: newBoard.id,
+        name: newBoard.name,
+        owner: newBoard.owner,
+        ownerId: newBoard.owner_id,
+        lastOpened: newBoard.updated_at,
+        isStarred: newBoard.starred,
+        templateType: newBoard.type,
+        onlineUsers: 1
+      };
+
+      const updatedBoards = [boardMetadata, ...boards.filter(b => b.id !== newBoard.id)];
+      setBoards(updatedBoards);
+      setRecentBoard(boardMetadata);
+      
+      // Also update localStorage for backward compatibility
+      localStorage.setItem('recentBoards', JSON.stringify(updatedBoards));
+      
+      // Redirect to canvas with the new board
+      router.push(`/canvas?board=${newBoard.id}&template=${templateId}`);
+      
+      toast({
+        title: "Board Created",
+        description: `"${template.title}" has been created successfully.`,
+      });
+      
+    } catch (error) {
+      console.error('Error creating board:', error);
+      toast({
+        title: "Error",
+        description: "Failed to create board. Please try again.",
+        variant: "destructive"
+      });
+    }
   };
 
-  const handleQuickCreate = () => {
-    // Create a new blank board
-    const newBoardId = `board-${Date.now()}`;
-    const newBoard: BoardMetadata = {
-      id: newBoardId,
-      name: 'Untitled Board',
-      owner: userInitials,
-      lastOpened: new Date().toISOString(),
-      isStarred: false,
-      isArchived: false,
-      templateType: 'blank'
-    };
-    
-    // Save blank board data
-    const blankData = getTemplateInitialData('blank');
-    localStorage.setItem(`board-${newBoardId}-data`, JSON.stringify(blankData));
-    
-    // Save default tools
-    const defaultTools = getTemplateTools('blank');
-    localStorage.setItem(`board-${newBoardId}-tools`, JSON.stringify(defaultTools));
-    
-    // Save to recent boards with deduplication
-    const updatedBoards = [newBoard, ...boards.filter(b => b.id !== newBoardId)];
-    localStorage.setItem('recentBoards', JSON.stringify(updatedBoards));
-    setBoards(updatedBoards);
-    setRecentBoard(newBoard);
-    
-    // Redirect to canvas with the new board
-    router.push(`/canvas?board=${newBoardId}`);
+  const handleQuickCreate = async () => {
+    try {
+      // Create a new blank board in database
+      const newBoard = await createBoardWithDefaults(
+        'Untitled Board',
+        'blank',
+        userName,
+        userId
+      );
+
+      // Add current user as collaborator
+      await addUserToBoard(userEmail, newBoard.id, userName);
+
+      // Save blank board data
+      const blankData = getTemplateInitialData('blank');
+      localStorage.setItem(`board-${newBoard.id}-data`, JSON.stringify(blankData));
+      
+      // Save default tools
+      const defaultTools = getTemplateTools('blank');
+      localStorage.setItem(`board-${newBoard.id}-tools`, JSON.stringify(defaultTools));
+      
+      // Transform to BoardMetadata and update state
+      const boardMetadata: BoardMetadata = {
+        id: newBoard.id,
+        name: newBoard.name,
+        owner: newBoard.owner,
+        ownerId: newBoard.owner_id,
+        lastOpened: newBoard.updated_at,
+        isStarred: newBoard.starred,
+        templateType: newBoard.type,
+        onlineUsers: 1
+      };
+
+      const updatedBoards = [boardMetadata, ...boards.filter(b => b.id !== newBoard.id)];
+      setBoards(updatedBoards);
+      setRecentBoard(boardMetadata);
+      
+      // Also update localStorage for backward compatibility
+      localStorage.setItem('recentBoards', JSON.stringify(updatedBoards));
+      
+      // Redirect to canvas with the new board
+      router.push(`/canvas?board=${newBoard.id}`);
+      
+      toast({
+        title: "Board Created",
+        description: "New blank board has been created successfully.",
+      });
+      
+    } catch (error) {
+      console.error('Error creating board:', error);
+      toast({
+        title: "Error",
+        description: "Failed to create board. Please try again.",
+        variant: "destructive"
+      });
+    }
   };
 
-  // UPDATED: Handle board click - REMOVED ACCESS CHECK
-  const handleBoardClick = (boardId?: string) => {
+  const handleBoardClick = async (boardId?: string) => {
     const boardToOpen = boardId ? boards.find(b => b.id === boardId) : recentBoard;
     if (!boardToOpen) return;
     
-    // REMOVED ACCESS CHECK - Allow anyone to open any board from dashboard
-    
-    // Update last opened time
-    const updatedBoard = {
-      ...boardToOpen,
-      lastOpened: new Date().toISOString()
-    };
-    
-    // Update boards array with the updated board
-    const updatedBoards = boards.map(b => 
-      b.id === updatedBoard.id ? updatedBoard : b
-    ).sort((a, b) => new Date(b.lastOpened).getTime() - new Date(a.lastOpened).getTime());
-    
-    localStorage.setItem('recentBoards', JSON.stringify(updatedBoards));
-    setBoards(updatedBoards);
-    setRecentBoard(updatedBoards[0]);
-    
-    // Redirect to canvas with the board
-    router.push(`/canvas?board=${boardToOpen.id}${boardToOpen.templateType ? `&template=${boardToOpen.templateType}` : ''}`);
+    try {
+      // Check if user has access to the board
+      const hasAccess = await checkBoardAccess(userId, boardToOpen.id);
+      
+      if (!hasAccess) {
+        toast({
+          title: "Access Denied",
+          description: "You don't have permission to access this board.",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      // Update online users count
+      await updateBoard(boardToOpen.id, {
+        online_users: (boardToOpen.onlineUsers || 0) + 1
+      });
+
+      // Update local state
+      const updatedBoard = {
+        ...boardToOpen,
+        lastOpened: new Date().toISOString(),
+        onlineUsers: (boardToOpen.onlineUsers || 0) + 1
+      };
+      
+      const updatedBoards = boards.map(b => 
+        b.id === updatedBoard.id ? updatedBoard : b
+      ).sort((a, b) => new Date(b.lastOpened).getTime() - new Date(a.lastOpened).getTime());
+      
+      setBoards(updatedBoards);
+      setRecentBoard(updatedBoards[0]);
+      
+      // Update localStorage for backward compatibility
+      localStorage.setItem('recentBoards', JSON.stringify(updatedBoards));
+      
+      // Redirect to canvas with the board
+      router.push(`/canvas?board=${boardToOpen.id}${boardToOpen.templateType ? `&template=${boardToOpen.templateType}` : ''}`);
+      
+    } catch (error) {
+      console.error('Error updating board:', error);
+      // Still redirect even if update fails
+      router.push(`/canvas?board=${boardToOpen.id}${boardToOpen.templateType ? `&template=${boardToOpen.templateType}` : ''}`);
+    }
   };
 
-  // Delete board handler
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!recentBoard) return;
     
-    // Remove the board from boards array
-    const filtered = boards.filter(b => b.id !== recentBoard.id);
-    localStorage.setItem('recentBoards', JSON.stringify(filtered));
-    setBoards(filtered);
-    
-    // Remove board canvas data as well
-    localStorage.removeItem(`board-${recentBoard.id}-data`);
-    localStorage.removeItem(`board-${recentBoard.id}-tools`);
-    
-    // Update recent board
-    setRecentBoard(filtered.length > 0 ? filtered[0] : null);
-    setDeleteConfirm(false);
+    try {
+      // Delete from database
+      await deleteBoard(recentBoard.id);
+      
+      // Remove from local state
+      const filtered = boards.filter(b => b.id !== recentBoard.id);
+      setBoards(filtered);
+      
+      // Remove board canvas data from localStorage
+      localStorage.removeItem(`board-${recentBoard.id}-data`);
+      localStorage.removeItem(`board-${recentBoard.id}-tools`);
+      
+      // Update recent board
+      setRecentBoard(filtered.length > 0 ? filtered[0] : null);
+      setDeleteConfirm(false);
+      
+      // Update localStorage for backward compatibility
+      localStorage.setItem('recentBoards', JSON.stringify(filtered));
+      
+      toast({
+        title: "Board Deleted",
+        description: `"${recentBoard.name}" has been deleted successfully.`,
+      });
+      
+    } catch (error) {
+      console.error('Error deleting board:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete board. Please try again.",
+        variant: "destructive"
+      });
+    }
   };
 
-  // Delete board handler for table
-  const handleDeleteTable = (id: string) => {
-    // Remove from boards
-    const filtered = boards.filter(b => b.id !== id);
-    setBoards(filtered);
-    localStorage.setItem('recentBoards', JSON.stringify(filtered));
-    // Remove board canvas data as well
-    localStorage.removeItem(`board-${id}-data`);
-    localStorage.removeItem(`board-${id}-tools`);
-    setDeleteConfirmTable(null);
-    
-    // Update recent board if it was deleted
-    if (recentBoard && recentBoard.id === id) {
-      setRecentBoard(filtered.length > 0 ? filtered[0] : null);
+  const handleDeleteTable = async (id: string) => {
+    try {
+      // Delete from database
+      await deleteBoard(id);
+      
+      // Remove from local state
+      const filtered = boards.filter(b => b.id !== id);
+      setBoards(filtered);
+      
+      // Remove board canvas data from localStorage
+      localStorage.removeItem(`board-${id}-data`);
+      localStorage.removeItem(`board-${id}-tools`);
+      
+      setDeleteConfirmTable(null);
+      
+      // Update recent board if it was deleted
+      if (recentBoard && recentBoard.id === id) {
+        setRecentBoard(filtered.length > 0 ? filtered[0] : null);
+      }
+      
+      // Update localStorage for backward compatibility
+      localStorage.setItem('recentBoards', JSON.stringify(filtered));
+      
+      toast({
+        title: "Board Deleted",
+        description: "Board has been deleted successfully.",
+      });
+      
+    } catch (error) {
+      console.error('Error deleting board:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete board. Please try again.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleToggleStar = async (boardId: string, currentStarred: boolean) => {
+    try {
+      await toggleStar(boardId, currentStarred);
+      
+      // Update local state
+      const updatedBoards = boards.map(board => 
+        board.id === boardId 
+          ? { ...board, isStarred: !currentStarred }
+          : board
+      );
+      
+      setBoards(updatedBoards);
+      
+      if (recentBoard && recentBoard.id === boardId) {
+        setRecentBoard({ ...recentBoard, isStarred: !currentStarred });
+      }
+      
+      // Update localStorage for backward compatibility
+      localStorage.setItem('recentBoards', JSON.stringify(updatedBoards));
+      
+      toast({
+        title: currentStarred ? "Board Unstarred" : "Board Starred",
+        description: `Board has been ${currentStarred ? 'unstarred' : 'starred'} successfully.`,
+      });
+      
+    } catch (error) {
+      console.error('Error toggling star:', error);
+      toast({
+        title: "Error",
+        description: "Failed to update board. Please try again.",
+        variant: "destructive"
+      });
     }
   };
 
@@ -970,9 +1200,9 @@ export default function Dashboard() {
     // Filter by ownership
     let ownershipMatch = true;
     if (ownedBy === "me") {
-      ownershipMatch = board.owner === userInitials;
+      ownershipMatch = board.ownerId === userId;
     } else if (ownedBy === "others") {
-      ownershipMatch = board.owner !== userInitials;
+      ownershipMatch = board.ownerId !== userId;
     }
     
     return searchMatch && filterMatch && ownershipMatch;
@@ -984,10 +1214,8 @@ export default function Dashboard() {
       case "last-opened":
         return new Date(b.lastOpened).getTime() - new Date(a.lastOpened).getTime();
       case "last-modified":
-        // Using lastOpened as a proxy for last modified since we don't have separate field
         return new Date(b.lastOpened).getTime() - new Date(a.lastOpened).getTime();
       case "created":
-        // Using lastOpened as a proxy for created since we don't have separate field
         return new Date(b.lastOpened).getTime() - new Date(a.lastOpened).getTime();
       case "name":
         return a.name.localeCompare(b.name);
@@ -995,6 +1223,18 @@ export default function Dashboard() {
         return 0;
     }
   });
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+          <p className="text-gray-600 mt-4">Loading your boards...</p>
+        </div>
+      </div>
+    );
+  }
 
   // If no board available, show the enhanced empty state
   if (!recentBoard) {
@@ -1432,7 +1672,7 @@ export default function Dashboard() {
                 </div>
               </div>
               
-              {/* Single Board Card - REMOVED EDITING FUNCTIONALITY */}
+              {/* Single Board Card */}
               <Card 
                 className="cursor-pointer transition-all duration-300 hover:shadow-lg border-0 shadow-sm relative max-w-2xl"
                 onClick={() => handleBoardClick()}
@@ -1444,7 +1684,7 @@ export default function Dashboard() {
                         <FolderOpen className="w-8 h-8 text-blue-600" />
                       </div>
                       
-                      {/* Board Name - No Editing */}
+                      {/* Board Name */}
                       <h3 className="text-2xl font-bold text-gray-800">{recentBoard.name}</h3>
                     </div>
                   </div>
@@ -1458,6 +1698,15 @@ export default function Dashboard() {
                             <User className="w-3 h-3" />
                             <span>Owner: {recentBoard.owner}</span>
                           </div>
+                          {recentBoard.onlineUsers && recentBoard.onlineUsers > 0 && (
+                            <>
+                              <span>•</span>
+                              <div className="flex items-center space-x-1">
+                                <Users className="w-3 h-3" />
+                                <span>{recentBoard.onlineUsers} online</span>
+                              </div>
+                            </>
+                          )}
                         </div>
                         {recentBoard.templateType && (
                           <div className="mt-2">
@@ -1468,6 +1717,17 @@ export default function Dashboard() {
                         )}
                       </div>
                       <div className="flex items-center space-x-2">
+                        <Button 
+                          variant="ghost"
+                          size="sm"
+                          className={`${recentBoard.isStarred ? 'text-yellow-500 hover:text-yellow-600' : 'text-gray-400 hover:text-yellow-500'}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleStar(recentBoard.id, !!recentBoard.isStarred);
+                          }}
+                        >
+                          <Star className={`w-4 h-4 ${recentBoard.isStarred ? 'fill-current' : ''}`} />
+                        </Button>
                         <Button 
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1532,6 +1792,7 @@ export default function Dashboard() {
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Template</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last opened</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Owner</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Online Users</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Options</th>
                       </tr>
                     </thead>
@@ -1542,7 +1803,20 @@ export default function Dashboard() {
                             className="px-6 py-4 whitespace-nowrap cursor-pointer"
                             onClick={() => handleBoardClick(board.id)}
                           >
-                            <div className="text-sm font-medium text-gray-900">{board.name}</div>
+                            <div className="flex items-center space-x-3">
+                              <Button 
+                                variant="ghost"
+                                size="sm"
+                                className={`p-1 h-6 w-6 ${board.isStarred ? 'text-yellow-500 hover:text-yellow-600' : 'text-gray-400 hover:text-yellow-500'}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleStar(board.id, !!board.isStarred);
+                                }}
+                              >
+                                <Star className={`w-3 h-3 ${board.isStarred ? 'fill-current' : ''}`} />
+                              </Button>
+                              <div className="text-sm font-medium text-gray-900">{board.name}</div>
+                            </div>
                           </td>
                           <td 
                             className="px-6 py-4 whitespace-nowrap cursor-pointer"
@@ -1556,13 +1830,22 @@ export default function Dashboard() {
                             className="px-6 py-4 whitespace-nowrap cursor-pointer"
                             onClick={() => handleBoardClick(board.id)}
                           >
-                            <div className="text-sm text-gray-600">{new Date(board.lastOpened).toLocaleString()}</div>
+                            <div className="text-sm text-gray-600">{getTimeAgo(board.lastOpened)}</div>
                           </td>
                           <td 
                             className="px-6 py-4 whitespace-nowrap cursor-pointer"
                             onClick={() => handleBoardClick(board.id)}
                           >
                             <div className="text-sm text-gray-600">{board.owner}</div>
+                          </td>
+                          <td 
+                            className="px-6 py-4 whitespace-nowrap cursor-pointer"
+                            onClick={() => handleBoardClick(board.id)}
+                          >
+                            <div className="flex items-center space-x-1">
+                              <Users className="w-3 h-3 text-gray-400" />
+                              <span className="text-sm text-gray-600">{board.onlineUsers || 0}</span>
+                            </div>
                           </td>
 
                           <td className="px-6 py-4 whitespace-nowrap">

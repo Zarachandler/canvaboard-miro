@@ -1,9 +1,13 @@
 import { supabase } from "@/lib/supabaseClient";
 
 // Add a collaborator to a board
-export async function addCollaborator(boardId: string, userId: string, role: "editor" | "viewer" | "admin" = "editor") {
+export async function addCollaborator(
+  boardId: string,
+  userId: string,
+  role: "editor" | "viewer" | "admin" = "editor"
+) {
   const { data, error } = await supabase
-    .from("board_collaborators")
+    .from("board_collaborator")
     .insert([{ board_id: boardId, user_id: userId, role }]);
 
   if (error) {
@@ -17,7 +21,7 @@ export async function addCollaborator(boardId: string, userId: string, role: "ed
 // Remove a collaborator
 export async function removeCollaborator(boardId: string, userId: string) {
   const { data, error } = await supabase
-    .from("board_collaborators")
+    .from("board_collaborator")
     .delete()
     .match({ board_id: boardId, user_id: userId });
 
@@ -32,8 +36,8 @@ export async function removeCollaborator(boardId: string, userId: string) {
 // Fetch all collaborators for a board
 export async function fetchCollaborators(boardId: string) {
   const { data, error } = await supabase
-    .from("board_collaborators")
-    .select("user_id, role, users:users(id, name, email)")
+    .from("board_collaborator")
+    .select("user_id, role, user:user(id, name, email)")
     .eq("board_id", boardId);
 
   if (error) {
@@ -45,9 +49,13 @@ export async function fetchCollaborators(boardId: string) {
 }
 
 // Update collaborator role
-export async function updateCollaboratorRole(boardId: string, userId: string, role: "editor" | "viewer" | "admin") {
+export async function updateCollaboratorRole(
+  boardId: string,
+  userId: string,
+  role: "editor" | "viewer" | "admin"
+) {
   const { data, error } = await supabase
-    .from("board_collaborators")
+    .from("board_collaborator")
     .update({ role })
     .match({ board_id: boardId, user_id: userId });
 
