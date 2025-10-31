@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react'; // Added useCallback import
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -31,26 +31,42 @@ import {
   Lightbulb,
   Shapes,
   Share2,
-  Download
+  Download,
+  Crown,
+  Edit3
 } from 'lucide-react';
 import Link from 'next/link'; 
 import { useToast } from '@/hooks/use-toast';
 
-// Import board functions and types
+// Import updated board functions
 import { 
   createBoardWithDefaults, 
-  getUserBoards, 
   updateBoard, 
   deleteBoard,
   toggleStar,
-  Board,
-  BoardType,
   fetchOnlineUsers,
   addUserToBoard,
-  checkBoardAccess
+  getAllAccessibleBoards,
+  Board as DatabaseBoard,
+  BoardType
 } from '@/lib/board';
+import { supabase } from '@/lib/supabaseClient'; // Make sure to import supabase
 
 // ---------- TYPES ----------
+type Collaborator = {
+  email: string;
+  name: string;
+  role: string;
+  user?: {
+    id: string;
+    name: string;
+    email: string;
+    avatar_url?: string;
+    online_status?: boolean;
+    last_active?: string;
+  };
+};
+
 type BoardMetadata = {
   id: string;
   name: string;
@@ -61,6 +77,9 @@ type BoardMetadata = {
   templateType?: string;
   onlineUsers?: number;
   ownerId?: string;
+  accessType?: 'owner' | 'collaborator';
+  collaboratorRole?: string;
+  collaborators?: Collaborator[];
 };
 
 type TemplateType = {
@@ -82,25 +101,15 @@ type SharedCanvas = {
   sharedBy: string;
 };
 
-// BoardFilterBar Props Interface
-interface BoardFilterBarProps {
-  filterBy: string;
-  setFilterBy: (value: string) => void;
-  ownedBy: string;
-  setOwnedBy: (value: string) => void;
-  sortBy: string;
-  setSortBy: (value: string) => void;
-}
-
-// BoardFilterBar Component Implementation
-const BoardFilterBar: React.FC<BoardFilterBarProps> = ({ 
-  filterBy, 
-  setFilterBy, 
-  ownedBy, 
-  setOwnedBy, 
-  sortBy, 
-  setSortBy 
-}) => {
+// BoardFilterBar Component
+const BoardFilterBar: React.FC<{ 
+  filterBy: string; 
+  setFilterBy: (value: string) => void; 
+  ownedBy: string; 
+  setOwnedBy: (value: string) => void; 
+  sortBy: string; 
+  setSortBy: (value: string) => void; 
+}> = ({ filterBy, setFilterBy, ownedBy, setOwnedBy, sortBy, setSortBy }) => {
   return (
     <div className="flex items-center space-x-4 p-4 bg-white rounded-lg border border-gray-200">
       <div className="flex items-center space-x-2">
@@ -293,25 +302,19 @@ const TemplateBar = ({ onTemplateClick }: { onTemplateClick: (templateId: string
   );
 };
 
-// ---------- SHARED CANVASES COMPONENT ----------
+// SharedCanvasesSection Component
 function SharedCanvasesSection({ userEmail }: { userEmail: string }) {
   const [sharedCanvases, setSharedCanvases] = useState<SharedCanvas[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
   const { toast } = useToast();
 
-  useEffect(() => {
-    if (userEmail) {
-      loadSharedCanvases();
-    }
-  }, [userEmail]);
-
-  const loadSharedCanvases = () => {
+  // Wrap loadSharedCanvases with useCallback
+  const loadSharedCanvases = useCallback(() => {
     try {
       const stored = JSON.parse(localStorage.getItem("sharedCanvases") || "{}");
       const userCanvases = stored[userEmail] || [];
       
-      // Transform the data to include proper typing
       const transformedCanvases: SharedCanvas[] = userCanvases.map((canvas: any) => ({
         id: canvas.id,
         data: canvas.data,
@@ -328,20 +331,22 @@ function SharedCanvasesSection({ userEmail }: { userEmail: string }) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [userEmail]); // Added userEmail as dependency
+
+  // Updated useEffect with loadSharedCanvases in dependencies
+  useEffect(() => {
+    if (userEmail) {
+      loadSharedCanvases();
+    }
+  }, [userEmail, loadSharedCanvases]); // Added loadSharedCanvases to dependencies
 
   const handleOpenSharedCanvas = (canvas: SharedCanvas) => {
     try {
-      // Parse the canvas data
       const canvasData = JSON.parse(canvas.data);
-      
-      // Create a new board ID for the shared canvas
       const newBoardId = `shared-${canvas.id}-${Date.now()}`;
       
-      // Save the shared canvas data to localStorage
       localStorage.setItem(`board-${newBoardId}-data`, JSON.stringify(canvasData));
       
-      // Create board metadata
       const newBoard: BoardMetadata = {
         id: newBoardId,
         name: `${canvas.boardName} (Shared)`,
@@ -350,12 +355,10 @@ function SharedCanvasesSection({ userEmail }: { userEmail: string }) {
         templateType: 'shared'
       };
       
-      // Save to recent boards
       const recentBoards = JSON.parse(localStorage.getItem('recentBoards') || '[]');
       const updatedBoards = [newBoard, ...recentBoards.filter((b: BoardMetadata) => b.id !== newBoardId)];
       localStorage.setItem('recentBoards', JSON.stringify(updatedBoards));
       
-      // Redirect to the canvas
       router.push(`/canvas?board=${newBoardId}`);
       
       toast({
@@ -397,7 +400,7 @@ function SharedCanvasesSection({ userEmail }: { userEmail: string }) {
   }
 
   if (sharedCanvases.length === 0) {
-    return null; // Don't show section if no shared canvases
+    return null;
   }
 
   return (
@@ -459,8 +462,7 @@ function SharedCanvasesSection({ userEmail }: { userEmail: string }) {
   );
 }
 
-// ---------- TEMPLATE FUNCTIONALITIES ----------
-
+// Template data and functions
 const getTemplateInitialData = (templateId: string) => {
   switch (templateId) {
     case 'flowchart':
@@ -784,6 +786,55 @@ const templates: TemplateType[] = [
   }
 ];
 
+// ==================== ADD COLLABORATIVE BOARDS FUNCTION ====================
+const fetchCollaborativeBoards = async () => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user?.email) return [];
+
+    console.log('🟡 [COLLAB] Fetching collaborative boards for:', user.email);
+
+    // Fetch from users table where current user is an editor
+    const { data, error } = await supabase
+      .from('users')
+      .select(`
+        *,
+        collaboration_board:collaboration_boards(*)
+      `)
+      .eq('email', user.email)
+      .eq('role', 'editor');
+
+    if (error) {
+      console.error('❌ [COLLAB] Error fetching collaborative boards:', error);
+      throw error;
+    }
+
+    console.log('🟢 [COLLAB] Found collaborative boards:', data?.length || 0);
+
+    // Transform the data to match your BoardMetadata format
+    const collaborativeBoards: BoardMetadata[] = (data || []).map(item => ({
+      id: item.board_id,
+      name: item.collaboration_board?.name || 'Unnamed Board',
+      owner: item.collaboration_board?.owner || 'Unknown Owner',
+      ownerId: item.collaboration_board?.owner_id || '',
+      lastOpened: item.collaboration_board?.updated_at || new Date().toISOString(),
+      isStarred: false,
+      isArchived: false,
+      templateType: item.collaboration_board?.type || 'blank',
+      onlineUsers: 0,
+      accessType: 'collaborator', // This indicates it's from users table
+      collaboratorRole: item.role
+    }));
+
+    return collaborativeBoards;
+  } catch (error) {
+    console.error('❌ [COLLAB] Error in fetchCollaborativeBoards:', error);
+    return [];
+  }
+};
+// ==================== END OF COLLABORATIVE BOARDS FUNCTION ====================
+
+// Main Dashboard Component
 export default function Dashboard() {
   const router = useRouter();
   const { toast } = useToast();
@@ -804,11 +855,8 @@ export default function Dashboard() {
   const [ownedBy, setOwnedBy] = useState("anyone");
   const [sortBy, setSortBy] = useState("last-opened");
 
-  useEffect(() => {
-    loadUserDataAndBoards();
-  }, []);
-
-  const loadUserDataAndBoards = async () => {
+  // Wrap loadUserDataAndBoards with useCallback
+  const loadUserDataAndBoards = useCallback(async () => {
     try {
       // Get user data from localStorage
       const storedUserEmail = localStorage.getItem('userEmail');
@@ -823,7 +871,7 @@ export default function Dashboard() {
         setUserInitials(initials);
       }
 
-      // Load boards from database
+      // Load boards from database using getAllAccessibleBoards (owned + collaborated)
       await loadBoardsFromDatabase(storedUserId);
       
     } catch (error) {
@@ -833,14 +881,28 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []); // Empty dependency array since it only uses setState functions
 
+  // Updated useEffect with loadUserDataAndBoards in dependencies
+  useEffect(() => {
+    loadUserDataAndBoards();
+  }, [loadUserDataAndBoards]); // Added loadUserDataAndBoards to dependencies
+
+  // ==================== UPDATED LOAD BOARDS FUNCTION ====================
   const loadBoardsFromDatabase = async (userId: string) => {
     try {
-      const databaseBoards = await getUserBoards(userId);
+      console.log('🟡 [DASHBOARD] Loading boards for user:', userId);
+
+      // ✅ Get owned boards
+      const databaseBoards = await getAllAccessibleBoards(userId);
+      console.log('🟢 [DASHBOARD] Owned boards:', databaseBoards.length);
       
-      // Transform database boards to BoardMetadata format
-      const transformedBoards: BoardMetadata[] = await Promise.all(
+      // ✅ NEW: Get collaborative boards from users table
+      const collaborativeBoards = await fetchCollaborativeBoards();
+      console.log('🟢 [DASHBOARD] Collaborative boards:', collaborativeBoards.length);
+
+      // Transform owned database boards to BoardMetadata format
+      const transformedOwnedBoards: BoardMetadata[] = await Promise.all(
         databaseBoards.map(async (board) => {
           const onlineUsers = await fetchOnlineUsers(board.id);
           return {
@@ -852,27 +914,34 @@ export default function Dashboard() {
             isStarred: board.starred,
             isArchived: false,
             templateType: board.type,
-            onlineUsers
+            onlineUsers,
+            accessType: 'owner', // This is owned board
+            collaboratorRole: 'owner'
           };
         })
       );
 
-      setBoards(transformedBoards);
+      // Combine owned boards + collaborative boards
+      const allBoards = [...transformedOwnedBoards, ...collaborativeBoards];
       
-      // Get only the most recent board
-      const mostRecentBoard = transformedBoards.length > 0 
-        ? transformedBoards.sort((a, b) => new Date(b.lastOpened).getTime() - new Date(a.lastOpened).getTime())[0]
+      console.log('🟢 [DASHBOARD] Total boards:', allBoards.length);
+      setBoards(allBoards);
+      
+      // Get the most recent board
+      const mostRecentBoard = allBoards.length > 0 
+        ? allBoards.sort((a, b) => new Date(b.lastOpened).getTime() - new Date(a.lastOpened).getTime())[0]
         : null;
       setRecentBoard(mostRecentBoard);
 
       // Also sync to localStorage for backward compatibility
-      localStorage.setItem('recentBoards', JSON.stringify(transformedBoards));
+      localStorage.setItem('recentBoards', JSON.stringify(allBoards));
       
     } catch (error) {
-      console.error('Error loading boards from database:', error);
-      throw error; // Re-throw to trigger fallback
+      console.error('❌ [DASHBOARD] Error loading boards from database:', error);
+      throw error;
     }
   };
+  // ==================== END OF UPDATED FUNCTION ====================
 
   const loadBoardsFromLocalStorage = () => {
     // Fallback to localStorage if database is not available
@@ -902,6 +971,7 @@ export default function Dashboard() {
       // Create board in database
       const newBoard = await createBoardWithDefaults(
         template.title,
+        
         templateId as BoardType,
         userName,
         userId
@@ -927,7 +997,9 @@ export default function Dashboard() {
         lastOpened: newBoard.updated_at,
         isStarred: newBoard.starred,
         templateType: newBoard.type,
-        onlineUsers: 1
+        onlineUsers: 1,
+        accessType: 'owner',
+        collaboratorRole: 'owner'
       };
 
       const updatedBoards = [boardMetadata, ...boards.filter(b => b.id !== newBoard.id)];
@@ -985,7 +1057,9 @@ export default function Dashboard() {
         lastOpened: newBoard.updated_at,
         isStarred: newBoard.starred,
         templateType: newBoard.type,
-        onlineUsers: 1
+        onlineUsers: 1,
+        accessType: 'owner',
+        collaboratorRole: 'owner'
       };
 
       const updatedBoards = [boardMetadata, ...boards.filter(b => b.id !== newBoard.id)];
@@ -1018,18 +1092,6 @@ export default function Dashboard() {
     if (!boardToOpen) return;
     
     try {
-      // Check if user has access to the board
-      const hasAccess = await checkBoardAccess(userId, boardToOpen.id);
-      
-      if (!hasAccess) {
-        toast({
-          title: "Access Denied",
-          description: "You don't have permission to access this board.",
-          variant: "destructive"
-        });
-        return;
-      }
-
       // Update online users count
       await updateBoard(boardToOpen.id, {
         online_users: (boardToOpen.onlineUsers || 0) + 1
@@ -1066,6 +1128,16 @@ export default function Dashboard() {
     if (!recentBoard) return;
     
     try {
+      // Only allow deletion if user is the owner
+      if (recentBoard.accessType !== 'owner') {
+        toast({
+          title: "Permission Denied",
+          description: "Only board owners can delete boards.",
+          variant: "destructive"
+        });
+        return;
+      }
+
       // Delete from database
       await deleteBoard(recentBoard.id);
       
@@ -1101,6 +1173,19 @@ export default function Dashboard() {
 
   const handleDeleteTable = async (id: string) => {
     try {
+      const boardToDelete = boards.find(b => b.id === id);
+      if (!boardToDelete) return;
+
+      // Only allow deletion if user is the owner
+      if (boardToDelete.accessType !== 'owner') {
+        toast({
+          title: "Permission Denied",
+          description: "Only board owners can delete boards.",
+          variant: "destructive"
+        });
+        return;
+      }
+
       // Delete from database
       await deleteBoard(id);
       
@@ -1200,9 +1285,9 @@ export default function Dashboard() {
     // Filter by ownership
     let ownershipMatch = true;
     if (ownedBy === "me") {
-      ownershipMatch = board.ownerId === userId;
+      ownershipMatch = board.accessType === 'owner';
     } else if (ownedBy === "others") {
-      ownershipMatch = board.ownerId !== userId;
+      ownershipMatch = board.accessType === 'collaborator';
     }
     
     return searchMatch && filterMatch && ownershipMatch;
@@ -1237,7 +1322,7 @@ export default function Dashboard() {
   }
 
   // If no board available, show the enhanced empty state
-  if (!recentBoard) {
+  if (!recentBoard || boards.length === 0) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white">
         {/* Top Bar */}
@@ -1645,6 +1730,101 @@ export default function Dashboard() {
             {/* Shared Canvases Section */}
             {userEmail && <SharedCanvasesSection userEmail={userEmail} />}
 
+            {/* ==================== ADDED: SHARED WITH ME SECTION ==================== */}
+            {/* Shared with Me Section - Collaborative Boards */}
+            {sortedBoards.filter(board => board.accessType === 'collaborator').length > 0 && (
+              <div className="mb-8">
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
+                      <Users className="w-4 h-4 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-semibold text-gray-900">
+                        Shared with Me
+                      </h3>
+                      <p className="text-sm text-gray-600">
+                        Boards shared with you as an editor
+                      </p>
+                    </div>
+                  </div>
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                    {sortedBoards.filter(board => board.accessType === 'collaborator').length} boards
+                  </Badge>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {sortedBoards
+                    .filter(board => board.accessType === 'collaborator')
+                    .map(board => (
+                      <Card 
+                        key={board.id} 
+                        className="cursor-pointer transition-all duration-300 hover:shadow-lg border-2 border-dashed border-blue-200 bg-blue-50/50 hover:bg-blue-100/50"
+                        onClick={() => handleBoardClick(board.id)}
+                      >
+                        <CardContent className="p-6">
+                          <div className="flex items-start justify-between mb-4">
+                            <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center">
+                              <Users className="w-6 h-6 text-white" />
+                            </div>
+                            <Badge variant="outline" className="bg-white text-blue-600 border-blue-300">
+                              {board.collaboratorRole}
+                            </Badge>
+                          </div>
+                          
+                          <h4 className="font-semibold text-gray-900 mb-2 truncate text-lg">
+                            {board.name}
+                          </h4>
+                          
+                          <div className="space-y-2 text-sm text-gray-600 mb-4">
+                            <div className="flex items-center space-x-2">
+                              <User className="w-4 h-4 text-gray-400" />
+                              <span>Owner: {board.owner}</span>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <Calendar className="w-4 h-4 text-gray-400" />
+                              <span>Last opened: {getTimeAgo(board.lastOpened)}</span>
+                            </div>
+                            {board.templateType && board.templateType !== 'blank' && (
+                              <div className="flex items-center space-x-2">
+                                <FolderOpen className="w-4 h-4 text-gray-400" />
+                                <span>Template: {board.templateType}</span>
+                              </div>
+                            )}
+                          </div>
+                          
+                          <div className="flex items-center justify-between">
+                            <Button 
+                              className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleBoardClick(board.id);
+                              }}
+                            >
+                              <FolderOpen className="w-4 h-4 mr-2" />
+                              Open Board
+                            </Button>
+                            
+                            <Button 
+                              variant="ghost"
+                              size="sm"
+                              className={`p-1 ${board.isStarred ? 'text-yellow-500 hover:text-yellow-600' : 'text-gray-400 hover:text-yellow-500'}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleStar(board.id, !!board.isStarred);
+                              }}
+                            >
+                              <Star className={`w-4 h-4 ${board.isStarred ? 'fill-current' : ''}`} />
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                </div>
+              </div>
+            )}
+            {/* ==================== END OF ADDED SECTION ==================== */}
+
             {/* Filter Bar */}
             <div className="mb-6">
               <BoardFilterBar
@@ -1715,6 +1895,13 @@ export default function Dashboard() {
                             </Badge>
                           </div>
                         )}
+                        {recentBoard.accessType && (
+                          <div className="mt-1">
+                            <Badge variant={recentBoard.accessType === 'owner' ? 'default' : 'outline'} className="text-xs">
+                              {recentBoard.accessType === 'owner' ? 'Owner' : 'Collaborator'}
+                            </Badge>
+                          </div>
+                        )}
                       </div>
                       <div className="flex items-center space-x-2">
                         <Button 
@@ -1737,41 +1924,43 @@ export default function Dashboard() {
                         >
                           Open Board
                         </Button>
-                        {deleteConfirm ? (
-                          <div 
-                            className="flex items-center space-x-2 bg-red-50 p-2 rounded-lg"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <span className="text-sm text-red-600 font-medium">Delete?</span>
+                        {recentBoard.accessType === 'owner' && (
+                          deleteConfirm ? (
+                            <div 
+                              className="flex items-center space-x-2 bg-red-50 p-2 rounded-lg"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <span className="text-sm text-red-600 font-medium">Delete?</span>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-red-600 hover:text-red-700 h-8"
+                                onClick={handleDelete}
+                              >
+                                Yes
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-gray-600 hover:text-gray-700 h-8"
+                                onClick={() => setDeleteConfirm(false)}
+                              >
+                                No
+                              </Button>
+                            </div>
+                          ) : (
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="text-red-600 hover:text-red-700 h-8"
-                              onClick={handleDelete}
+                              className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteConfirm(true);
+                              }}
                             >
-                              Yes
+                              <Trash2 className="w-4 h-4" />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="text-gray-600 hover:text-gray-700 h-8"
-                              onClick={() => setDeleteConfirm(false)}
-                            >
-                              No
-                            </Button>
-                          </div>
-                        ) : (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-red-500 hover:text-red-700 hover:bg-red-50"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeleteConfirm(true);
-                            }}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
+                          )
                         )}
                       </div>
                     </div>
@@ -1783,7 +1972,7 @@ export default function Dashboard() {
             {/* Boards Table View */}
             {sortedBoards.length > 0 && (
               <div className="mb-8">
-                <h3 className="text-xl font-semibold text-gray-900 mb-6">Boards in this team</h3>
+                <h3 className="text-xl font-semibold text-gray-900 mb-6">All Boards ({sortedBoards.length})</h3>
                 <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
                   <table className="w-full">
                     <thead className="bg-gray-50">
@@ -1792,6 +1981,7 @@ export default function Dashboard() {
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Template</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last opened</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Owner</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Online Users</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Options</th>
                       </tr>
@@ -1842,6 +2032,14 @@ export default function Dashboard() {
                             className="px-6 py-4 whitespace-nowrap cursor-pointer"
                             onClick={() => handleBoardClick(board.id)}
                           >
+                            <Badge variant={board.accessType === 'owner' ? 'default' : 'outline'} className="text-xs">
+                              {board.accessType === 'owner' ? 'Owner' : 'Collaborator'}
+                            </Badge>
+                          </td>
+                          <td 
+                            className="px-6 py-4 whitespace-nowrap cursor-pointer"
+                            onClick={() => handleBoardClick(board.id)}
+                          >
                             <div className="flex items-center space-x-1">
                               <Users className="w-3 h-3 text-gray-400" />
                               <span className="text-sm text-gray-600">{board.onlineUsers || 0}</span>
@@ -1870,17 +2068,19 @@ export default function Dashboard() {
                                 </Button>
                               </div>
                             ) : (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="text-red-500 hover:text-red-700 hover:bg-red-50"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setDeleteConfirmTable(board.id);
-                                }}
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
+                              board.accessType === 'owner' && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDeleteConfirmTable(board.id);
+                                  }}
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              )
                             )}
                           </td>
                         </tr>

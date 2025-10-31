@@ -1,12 +1,32 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from './supabaseClient';
 
 export function useBoardPresence(boardId: string, user: any) {
   const [presenceUsers, setPresenceUsers] = useState<any[]>([]);
   const channelRef = useRef<any>(null);
 
+  // Memoize the updateCursor function to prevent unnecessary recreations
+  const updateCursor = useCallback((x: number, y: number) => {
+    if (!user?.id) return;
+
+    const presence = {
+      id: user.id,
+      name: user.name,
+      x,
+      y,
+      color: getColorFromId(user.id),
+    };
+
+    setPresenceUsers(prev => {
+      const others = prev.filter(p => p.id !== user.id);
+      return [...others, presence];
+    });
+
+    channelRef.current?.broadcast('cursor', presence);
+  }, [user?.id, user?.name]); // Add user properties as dependencies
+
   useEffect(() => {
-    if (!user) return;
+    if (!user?.id || !boardId) return;
 
     const channel = supabase.channel(`presence:${boardId}`);
     channelRef.current = channel;
@@ -23,24 +43,7 @@ export function useBoardPresence(boardId: string, user: any) {
     return () => {
       channel.unsubscribe();
     };
-  }, [boardId, user?.id]);
-
-  const updateCursor = (x: number, y: number) => {
-    const presence = {
-      id: user.id,
-      name: user.name,
-      x,
-      y,
-      color: getColorFromId(user.id),
-    };
-
-    setPresenceUsers(prev => {
-      const others = prev.filter(p => p.id !== user.id);
-      return [...others, presence];
-    });
-
-    channelRef.current?.broadcast('cursor', presence);
-  };
+  }, [boardId, user?.id]); // Added user.id to dependencies
 
   return { presenceUsers, updateCursor };
 }

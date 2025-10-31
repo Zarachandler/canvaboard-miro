@@ -91,6 +91,101 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// NEW FUNCTION: Add collaborator to users table for dashboard visibility
+const addCollaboratorToUsersTable = async (
+  boardId: string,
+  collaboratorEmail: string,
+  currentUserId: string
+): Promise<void> => {
+  try {
+    console.log('🟡 [ADD TO USERS TABLE] Adding collaborator to users table:', { boardId, collaboratorEmail });
+
+    // Get board data to copy to users table
+    const { data: boardData } = await supabase
+      .from('collaboration_boards')
+      .select('*')
+      .eq('id', boardId)
+      .single();
+
+    if (!boardData) {
+      console.error('🔴 Board not found for users table');
+      return;
+    }
+
+    // Add to users table with full board data
+    const { error } = await supabase
+      .from('users')
+      .insert({
+        name: collaboratorEmail.split('@')[0],
+        email: collaboratorEmail,
+        role: 'editor',
+        board_id: boardId,
+        board_name: boardData.name,
+        board_type: 'collaboration',
+        board_owner: currentUserId,
+        board_owner_id: currentUserId,
+        board_thumbnail: null,
+        board_starred: false,
+        board_created_at: boardData.created_at,
+        board_updated_at: boardData.updated_at,
+        added_at: new Date().toISOString(),
+      });
+
+    if (error) {
+      console.error('🔴 Error adding collaborator to users table:', error);
+      // Don't fail the whole operation if this fails
+    } else {
+      console.log('🟢 Collaborator added to users table successfully');
+    }
+  } catch (error) {
+    console.error('🔴 Error in addCollaboratorToUsersTable:', error);
+  }
+};
+
+// UPDATED FUNCTION: Add collaborator to BOTH tables
+const addCollaboratorToBoard = async (
+  boardId: string, 
+  collaboratorEmail: string, 
+  role: 'owner' | 'editor' | 'viewer' = 'viewer',
+  currentUserId: string
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    console.log('🟡 [ADD COLLABORATOR] Adding to BOTH tables:', { boardId, collaboratorEmail, role });
+
+    // First ensure the board exists and owner is in collaborators
+    await ensureBoardExists(boardId, currentUserId);
+
+    // 1. Add to board_collaborators table (for real-time collaboration)
+    const { data, error } = await supabase
+      .from('board_collaborators')
+      .insert({
+        board_id: boardId,
+        email: collaboratorEmail,
+        name: collaboratorEmail.split('@')[0],
+        role: role,
+        status: 'invited',
+        invited_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('🔴 Error adding collaborator to board_collaborators:', error);
+      return { success: false, error: error.message };
+    }
+
+    console.log('🟢 Collaborator added to board_collaborators successfully:', data);
+
+    // 2. ALSO add to users table (for dashboard visibility)
+    await addCollaboratorToUsersTable(boardId, collaboratorEmail, currentUserId);
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('🔴 Error adding collaborator:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // SIMPLIFIED Board Service Functions - Guaranteed to work
 const saveCollaborationBoard = async (
   boardId: string,
@@ -232,46 +327,6 @@ const getBoardById = async (
     return { success: true, data };
   } catch (error: any) {
     console.error('Error fetching board:', error);
-    return { success: false, error: error.message };
-  }
-};
-
-// SIMPLIFIED: Collaborator operations - No permission checks for now
-const addCollaboratorToBoard = async (
-  boardId: string, 
-  collaboratorEmail: string, 
-  role: 'owner' | 'editor' | 'viewer' = 'viewer',
-  currentUserId: string
-): Promise<{ success: boolean; error?: string }> => {
-  try {
-    console.log('Adding collaborator to board_collaborators:', { boardId, collaboratorEmail, role });
-
-    // First ensure the board exists and owner is in collaborators
-    await ensureBoardExists(boardId, currentUserId);
-
-    // Add the new collaborator
-    const { data, error } = await supabase
-      .from('board_collaborators')
-      .insert({
-        board_id: boardId,
-        email: collaboratorEmail,
-        name: collaboratorEmail.split('@')[0],
-        role: role,
-        status: 'invited',
-        invited_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Error adding collaborator:', error);
-      return { success: false, error: error.message };
-    }
-
-    console.log('Collaborator added successfully:', data);
-    return { success: true };
-  } catch (error: any) {
-    console.error('Error adding collaborator:', error);
     return { success: false, error: error.message };
   }
 };
@@ -490,13 +545,7 @@ function CollaboratorsPanel({
   }, [collaborators, searchEmail]);
 
   // Load collaborators from database when panel opens
-  useEffect(() => {
-    if (isOpen && boardId && currentUser && currentUserId) {
-      loadCollaboratorsFromDB();
-    }
-  }, [isOpen, boardId, currentUser, currentUserId]);
-
-  const loadCollaboratorsFromDB = async () => {
+  const loadCollaboratorsFromDB = useCallback(async () => {
     if (!boardId || !currentUser || !currentUserId) {
       console.log('Missing data for loading collaborators');
       return;
@@ -536,7 +585,13 @@ function CollaboratorsPanel({
     } finally {
       setLoading(false);
     }
-  };
+  }, [boardId, currentUser, currentUserId, onCollaboratorsUpdate, toast]);
+
+  useEffect(() => {
+    if (isOpen && boardId && currentUser && currentUserId) {
+      loadCollaboratorsFromDB();
+    }
+  }, [isOpen, boardId, currentUser, currentUserId, loadCollaboratorsFromDB]);
 
   const handleInviteCollaborator = async () => {
     if (!searchEmail.trim()) {
@@ -577,7 +632,7 @@ function CollaboratorsPanel({
     try {
       console.log('Starting invite process for:', searchEmail);
       
-      // Save to database - THIS WILL DEFINITELY WORK NOW
+      // Save to database - USING THE UPDATED FUNCTION
       const result = await addCollaboratorToBoard(boardId, searchEmail, 'viewer', currentUserId!);
       
       if (!result.success) {

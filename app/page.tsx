@@ -16,8 +16,7 @@ import {
   CardFooter,
 } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
-// import { FcGoogle } from 'react-icons/fc'
-// import { FaFacebook } from 'react-icons/fa'
+import { motion } from 'framer-motion'
 
 export default function AuthPage() {
   const [mode, setMode] = useState<'signup' | 'login'>('signup')
@@ -27,41 +26,57 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false)
   const router = useRouter()
 
-  // Email/password login or signup
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
-
     try {
       if (mode === 'signup') {
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: { data: { full_name: name } },
         })
-
         if (error) throw error
 
-        toast.success('✅ Account created! Please confirm your email before logging in.')
-        setMode('login')
+        if (data.user) {
+          localStorage.setItem('userEmail', data.user.email!)
+          localStorage.setItem('userName', name)
+          localStorage.setItem('userId', data.user.id)
+          toast.success('✅ Account created successfully! Welcome to Miro!')
+          router.push('/dashboard')
+        } else {
+          toast.success('✅ Account created! Please check your email to confirm your account.')
+          setMode('login')
+        }
+
         setEmail('')
         setPassword('')
         setName('')
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password })
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+
         if (error) {
-          toast.error('❌ Invalid email or password')
+          if (error.message.includes('Invalid login credentials')) {
+            toast.error('❌ Invalid email or password')
+          } else if (error.message.includes('Email not confirmed')) {
+            toast.error('❌ Please confirm your email before logging in.')
+          } else {
+            toast.error(`❌ ${error.message}`)
+          }
           return
         }
 
-        const { data: sessionData } = await supabase.auth.getSession()
-        if (!sessionData.session) {
-          toast.error('❌ You must confirm your email before logging in.')
-          return
-        }
+        if (data.user) {
+          localStorage.setItem('userEmail', data.user.email!)
+          localStorage.setItem(
+            'userName',
+            data.user.user_metadata?.full_name || data.user.email?.split('@')[0] || 'User'
+          )
+          localStorage.setItem('userId', data.user.id)
 
-        toast.success('🎉 Logged in successfully!')
-        router.push('/dashboard')
+          toast.success('🎉 Logged in successfully!')
+          router.push('/dashboard')
+        }
       }
     } catch (err: any) {
       toast.error(err.message || 'Something went wrong')
@@ -70,121 +85,153 @@ export default function AuthPage() {
     }
   }
 
-  // OAuth login
-  const handleOAuthLogin = async (provider: 'google' | 'facebook') => {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: `${window.location.origin}/dashboard`,
-      },
-    })
-    if (error) toast.error(error.message)
-  }
-
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
-      <Card className="w-full max-w-md shadow-xl rounded-2xl border border-border bg-white">
-        <CardHeader className="space-y-2 text-center">
-          <CardTitle className="text-2xl font-bold tracking-tight text-black">
-            {mode === 'signup' ? 'Create your Miro account' : 'Welcome back to Miro'}
-          </CardTitle>
-          <CardDescription className="text-gray-800">
-            {mode === 'signup'
-              ? 'Sign up to start collaborating on boards'
-              : 'Login to continue'}
-          </CardDescription>
-        </CardHeader>
+    <motion.div
+      className="min-h-screen flex items-center justify-center bg-gradient-to-br from-yellow-100 via-yellow-300 to-black px-4"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.8 }}
+    >
+      <motion.div
+        initial={{ y: 40, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ type: 'spring', stiffness: 100, damping: 15 }}
+      >
+        <Card className="w-full max-w-lg shadow-2xl rounded-3xl border-0 bg-black/90 backdrop-blur-md text-white transition-all duration-300 hover:shadow-yellow-400/30">
+          <CardHeader className="space-y-3 text-center pb-4">
+            <motion.div
+              className="flex justify-center mb-2"
+              whileHover={{ rotate: 10, scale: 1.1 }}
+              transition={{ type: 'spring', stiffness: 300 }}
+            >
+              <div className="w-14 h-14 bg-gradient-to-br from-yellow-400 to-amber-600 rounded-2xl flex items-center justify-center shadow-lg">
+                <div className="w-6 h-6 bg-black rounded-lg opacity-90"></div>
+              </div>
+            </motion.div>
 
-        <form onSubmit={handleSubmit}>
-          <CardContent className="space-y-4">
-            {mode === 'signup' && (
+            <CardTitle className="text-3xl font-extrabold bg-gradient-to-r from-yellow-400 to-amber-500 bg-clip-text text-transparent">
+              {mode === 'signup' ? 'MIRO — Create Your Account' : 'Welcome Back'}
+            </CardTitle>
+            <CardDescription className="text-gray-300 text-base">
+              {mode === 'signup'
+                ? 'Sign up to start creating collaborative boards'
+                : 'Sign in to your account to continue'}
+            </CardDescription>
+          </CardHeader>
+
+          <form onSubmit={handleSubmit}>
+            <CardContent className="space-y-5">
+              {mode === 'signup' && (
+                <motion.div
+                  className="space-y-2"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.1 }}
+                >
+                  <Label htmlFor="name" className="text-gray-200 font-medium">
+                    Full Name
+                  </Label>
+                  <Input
+                    id="name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    required
+                    placeholder="Enter your full name"
+                    className="bg-gray-900 border-gray-700 focus:border-yellow-500 focus:ring-yellow-500 text-white placeholder-gray-500"
+                    disabled={loading}
+                  />
+                </motion.div>
+              )}
+
               <div className="space-y-2">
-                <Label htmlFor="name" className="text-black">Full Name</Label>
+                <Label htmlFor="email" className="text-gray-200 font-medium">
+                  Email
+                </Label>
                 <Input
-                  id="name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   required
-                  className="bg-white text-black"
+                  placeholder="Enter your email"
+                  className="bg-gray-900 border-gray-700 focus:border-yellow-500 focus:ring-yellow-500 text-white placeholder-gray-500"
+                  disabled={loading}
                 />
               </div>
-            )}
 
-            <div className="space-y-2">
-              <Label htmlFor="email" className="text-black">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                className="bg-white text-black"
-              />
-            </div>
+              <div className="space-y-2">
+                <Label htmlFor="password" className="text-gray-200 font-medium">
+                  Password
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  placeholder="Enter your password"
+                  minLength={6}
+                  className="bg-gray-900 border-gray-700 focus:border-yellow-500 focus:ring-yellow-500 text-white placeholder-gray-500"
+                  disabled={loading}
+                />
+                {mode === 'signup' && (
+                  <p className="text-xs text-gray-400">
+                    Password must be at least 6 characters long
+                  </p>
+                )}
+              </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="password" className="text-black">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                className="bg-white text-black"
-              />
-            </div>
-
-            <Button
-              type="submit"
-              disabled={loading}
-              className="w-full text-base font-medium bg-black text-yellow-400 hover:bg-gray-900"
-            >
-              {loading ? 'Processing...' : mode === 'signup' ? 'Sign Up' : 'Login'}
-            </Button>
-
-            <div className="flex items-center space-x-2 py-2">
-              <Separator className="flex-1 bg-black/30" />
-              {/* <span className="text-xs text-gray-800">or continue with</span> */}
-              <Separator className="flex-1 bg-black/30" />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              {/* <Button
-                type="button"
-                variant="outline"
-                onClick={() => handleOAuthLogin('google')}
-                className="flex items-center justify-center space-x-2 bg-white text-black"
+              <Button
+                type="submit"
+                disabled={loading}
+                className="w-full text-base font-semibold bg-gradient-to-r from-yellow-500 to-yellow-600 hover:from-yellow-400 hover:to-yellow-500 text-black shadow-lg transition-all duration-200"
               >
-                <FcGoogle size={18} />
-                <span>Google</span>
-              </Button> */}
+                {loading ? (
+                  <div className="flex items-center space-x-2">
+                    <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin"></div>
+                    <span>Processing...</span>
+                  </div>
+                ) : mode === 'signup' ? (
+                  'Create Account'
+                ) : (
+                  'Sign In'
+                )}
+              </Button>
 
-              {/* <Button
-                type="button"
-                variant="outline"
-                onClick={() => handleOAuthLogin('facebook')}
-                className="flex items-center justify-center space-x-2 bg-white text-black"
-              >
-                <FaFacebook size={18} className="text-blue-600" />
-                <span>Facebook</span>
-              </Button> */}
-            </div>
-          </CardContent>
+              <div className="flex items-center space-x-2 py-2">
+                <Separator className="flex-1 bg-gray-700" />
+                <Separator className="flex-1 bg-gray-700" />
+              </div>
+            </CardContent>
 
-          <CardFooter className="flex flex-col space-y-4">
-            <p className="text-gray-800 text-sm text-center">
-              {/* {mode === 'signup' ? 'Already have an account?' : "Don’t have an account?"}{' '} */}
-              <button
-                type="button"
-                className="text-black font-medium hover:underline"
-                onClick={() => setMode(mode === 'signup' ? 'login' : 'signup')}
-              >
-                {mode === 'signup' ? 'Login' : 'Sign Up'}
-              </button>
-            </p>
-          </CardFooter>
-        </form>
-      </Card>
-    </div>
+            <CardFooter className="flex flex-col space-y-4 pt-2">
+              <p className="text-gray-300 text-sm text-center">
+                {mode === 'signup'
+                  ? 'Already have an account?'
+                  : "Don’t have an account?"}{' '}
+                <button
+                  type="button"
+                  className="text-yellow-400 font-semibold hover:text-yellow-300 hover:underline transition-colors"
+                  onClick={() => {
+                    setMode(mode === 'signup' ? 'login' : 'signup')
+                    setEmail('')
+                    setPassword('')
+                    setName('')
+                  }}
+                  disabled={loading}
+                >
+                  {mode === 'signup' ? 'Sign in' : 'Sign up'}
+                </button>
+              </p>
+
+              <div className="text-xs text-gray-500 text-center space-y-1">
+                <p>By continuing, you agree to our Terms of Service</p>
+                <p>and acknowledge our Privacy Policy</p>
+              </div>
+            </CardFooter>
+          </form>
+        </Card>
+      </motion.div>
+    </motion.div>
   )
 }
